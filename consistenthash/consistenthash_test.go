@@ -63,6 +63,19 @@ func TestHashing(t *testing.T) {
 		}
 	}
 
+	// Dels 4, 14,24
+	hash.Del("4")
+
+	// 27 should now map to 8.
+	testCases["2"] = "2"
+	testCases["14"] = "6"
+	testCases["23"] = "6"
+
+	for k, v := range testCases {
+		if hash.Get(k) != v {
+			t.Errorf("Asking for %s, should have yielded %s", k, v)
+		}
+	}
 }
 
 func TestConsistency(t *testing.T) {
