@@ -262,18 +262,20 @@ func (g *Group) load(ctx Context, key string, dest Sink) (value ByteView, destPo
 		g.Stats.LoadsDeduped.Add(1)
 		var value ByteView
 		var err error
-		if peer, ok := g.peers.PickPeer(key); ok {
+        
+        var peer,ordpeer ProtoGetter
+        for ok := false;ok && ordpeer != peer;peer, ok = g.peers.PickPeer(key) {
+		
 			value, err = g.getFromPeer(ctx, peer, key)
 			if err == nil {
 				g.Stats.PeerLoads.Add(1)
 				return value, nil
 			}
 			g.Stats.PeerErrors.Add(1)
-			// TODO(bradfitz): log the peer's error? keep
-			// log of the past few for /groupcachez?  It's
-			// probably boring (normal task movement), so not
-			// worth logging I imagine.
-		}
+        
+        }
+        
+        
 		value, err = g.getLocally(ctx, key, dest)
 		if err != nil {
 			g.Stats.LocalLoadErrs.Add(1)
