@@ -169,9 +169,15 @@ func (p *HTTPPool) PickPeer(key string) (ProtoGetter, bool) {
 	if p.peers.IsEmpty() {
 		return nil, false
 	}
-	if peer := p.peers.Get(key); peer != p.self {
-		return p.httpGetters[peer], true
-	}
+    
+    for peer := p.self; peer != p.self;peer = p.peers.Get(key){
+        if _, wrong, _ := p.httpGetters[peer].Stats(); 0 == wrong{
+    		return p.httpGetters[peer], true
+        }
+        
+        p.DelPeer(peer)
+    }
+    
 	return nil, false
 }
 
@@ -220,10 +226,18 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type httpGetter struct {
 	transport func(Context) http.RoundTripper
 	baseURL   string
+    
+    statsTotal AtomicInt
+    statsWrong AtomicInt
+    statsSuccess AtomicInt
 }
 
 var bufferPool = sync.Pool{
 	New: func() interface{} { return new(bytes.Buffer) },
+}
+
+func (h * httpGetter) Stats() (total int64, wrong int64, success int64) {
+    return h.statsTotal.Get(),h.statsWrong.Get(),h.statsSuccess.Get()
 }
 
 func (h *httpGetter) Get(context Context, in *pb.GetRequest, out *pb.GetResponse) error {
@@ -241,24 +255,33 @@ func (h *httpGetter) Get(context Context, in *pb.GetRequest, out *pb.GetResponse
 	if h.transport != nil {
 		tr = h.transport(context)
 	}
+    
+    h.statsTotal.Add(1)
 	res, err := tr.RoundTrip(req)
 	if err != nil {
 		return err
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
+        h.statsWrong.Add(1)
 		return fmt.Errorf("server returned: %v", res.Status)
 	}
 	b := bufferPool.Get().(*bytes.Buffer)
 	b.Reset()
 	defer bufferPool.Put(b)
+    
 	_, err = io.Copy(b, res.Body)
 	if err != nil {
+        h.statsWrong.Add(1)
 		return fmt.Errorf("reading response body: %v", err)
 	}
+    
 	err = proto.Unmarshal(b.Bytes(), out)
 	if err != nil {
+        h.statsWrong.Add(1)
 		return fmt.Errorf("decoding response body: %v", err)
 	}
+    
+    h.statsWrong.Add(1)
 	return nil
 }
