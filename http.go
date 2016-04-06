@@ -30,7 +30,7 @@ import (
 	"github.com/golang/protobuf/proto"
 )
 
-const defaultBasePath = "/_groupcache/"
+const defaultBasePath = "_groupcache"
 
 const defaultReplicas = 50
 
@@ -40,11 +40,6 @@ type HTTPPool struct {
 	// receives a request.
 	// If nil, the server uses a nil Context.
 	Context func(*http.Request) Context
-
-	// Transport optionally specifies an http.RoundTripper for the client
-	// to use when it makes a request.
-	// If nil, the client uses http.DefaultTransport.
-	Transport func(Context) http.RoundTripper
 
 	// this peer's base URL, e.g. "https://example.net:8000"
 	self string
@@ -66,6 +61,11 @@ type HTTPPoolOptions struct {
 	// Replicas specifies the number of key replicas on the consistent hash.
 	// If blank, it defaults to 50.
 	Replicas int
+
+	// Transport optionally specifies an http.RoundTripper for the client
+	// to use when it makes a request.
+	// If nil, the client uses http.DefaultTransport.
+	Transport func(Context) http.RoundTripper
 
 	// HashFn specifies the hash function of the consistent hash.
 	// If blank, it defaults to crc32.ChecksumIEEE.
@@ -100,9 +100,12 @@ func NewHTTPPoolOpts(self string, o *HTTPPoolOptions) *HTTPPool {
 	if o != nil {
 		p.opts = *o
 	}
+    
 	if p.opts.BasePath == "" {
 		p.opts.BasePath = defaultBasePath
 	}
+    
+    p.opts.BasePath = "/" + p.opts.BasePath
 	if p.opts.Replicas == 0 {
 		p.opts.Replicas = defaultReplicas
 	}
@@ -122,7 +125,7 @@ func (p *HTTPPool) Set(peers ...string) {
 	p.peers.Add(peers...)
 	p.httpGetters = make(map[string]*httpGetter, len(peers))
 	for _, peer := range peers {
-		p.httpGetters[peer] = &httpGetter{transport: p.Transport, baseURL: peer + p.opts.BasePath}
+		p.httpGetters[peer] = &httpGetter{transport: p.opts.Transport, baseURL: peer + p.opts.BasePath}
 	}
 }
 
@@ -141,7 +144,7 @@ func (p *HTTPPool) AddPeer(peers ...string) {
 	    p.httpGetters = make(map[string]*httpGetter)
     }
 	for _, peer := range peers {
-		p.httpGetters[peer] = &httpGetter{transport: p.Transport, baseURL: peer + p.opts.BasePath}
+		p.httpGetters[peer] = &httpGetter{transport: p.opts.Transport, baseURL: peer + p.opts.BasePath}
 	}
 }
 
@@ -151,6 +154,14 @@ func (p *HTTPPool) AddPeer(peers ...string) {
 func (p *HTTPPool) DelPeer(peers ...string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+    
+    p.unlockDelPeer(peers...)
+}
+
+// Set updates the pool's list of peers.
+// Each peer value should be a valid base URL,
+// for example "http://example.net:8000".
+func (p *HTTPPool) unlockDelPeer(peers ...string) {
     
     if nil != p.peers{
 	    p.peers.Del(peers...)
@@ -170,12 +181,12 @@ func (p *HTTPPool) PickPeer(key string) (ProtoGetter, bool) {
 		return nil, false
 	}
     
-    for peer := p.peers.Get(key); peer != p.self;peer = p.peers.Get(key){
+    for peer := p.peers.Get(key); nil != p.httpGetters[peer] && peer != p.self;peer = p.peers.Get(key){
         if _, wrong, _ := p.httpGetters[peer].Stats(); 0 == wrong{
     		return p.httpGetters[peer], true
         }
         
-        p.DelPeer(peer)
+        p.unlockDelPeer(peer)
     }
     
 	return nil, false
@@ -186,7 +197,7 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(r.URL.Path, p.opts.BasePath) {
 		panic("HTTPPool serving unexpected path: " + r.URL.Path)
 	}
-	parts := strings.SplitN(r.URL.Path[len(p.opts.BasePath):], "/", 2)
+	parts := strings.SplitN(r.URL.Path[len(p.opts.BasePath) + 1:], "/", 2)
 	if len(parts) != 2 {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
@@ -241,12 +252,23 @@ func (h * httpGetter) Stats() (total int64, wrong int64, success int64) {
 }
 
 func (h *httpGetter) Get(context Context, in *pb.GetRequest, out *pb.GetResponse) error {
+    var isSuccess bool = false
+    
+    defer func(){
+        if isSuccess {
+            h.statsSuccess.Add(1)
+        } else {
+            h.statsWrong.Add(1)
+        }
+    }()
+    
 	u := fmt.Sprintf(
-		"%v%v/%v",
+		"%v/%v/%v",
 		h.baseURL,
 		url.QueryEscape(in.GetGroup()),
 		url.QueryEscape(in.GetKey()),
 	)
+    
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
 		return err
@@ -263,7 +285,6 @@ func (h *httpGetter) Get(context Context, in *pb.GetRequest, out *pb.GetResponse
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-        h.statsWrong.Add(1)
 		return fmt.Errorf("server returned: %v", res.Status)
 	}
 	b := bufferPool.Get().(*bytes.Buffer)
@@ -272,16 +293,14 @@ func (h *httpGetter) Get(context Context, in *pb.GetRequest, out *pb.GetResponse
     
 	_, err = io.Copy(b, res.Body)
 	if err != nil {
-        h.statsWrong.Add(1)
 		return fmt.Errorf("reading response body: %v", err)
 	}
     
 	err = proto.Unmarshal(b.Bytes(), out)
 	if err != nil {
-        h.statsWrong.Add(1)
 		return fmt.Errorf("decoding response body: %v", err)
 	}
     
-    h.statsWrong.Add(1)
+    isSuccess = true
 	return nil
 }
