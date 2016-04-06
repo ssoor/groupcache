@@ -170,7 +170,7 @@ func (p *HTTPPool) PickPeer(key string) (ProtoGetter, bool) {
 		return nil, false
 	}
     
-    for peer := p.self; peer != p.self;peer = p.peers.Get(key){
+    for peer := p.peers.Get(key); peer != p.self;peer = p.peers.Get(key){
         if _, wrong, _ := p.httpGetters[peer].Stats(); 0 == wrong{
     		return p.httpGetters[peer], true
         }

@@ -263,16 +263,17 @@ func (g *Group) load(ctx Context, key string, dest Sink) (value ByteView, destPo
 		var value ByteView
 		var err error
         
-        var peer,ordpeer ProtoGetter
-        for ok := false;ok && ordpeer != peer;peer, ok = g.peers.PickPeer(key) {
+        var ordpeer ProtoGetter
+        for peer, ok := g.peers.PickPeer(key);ok && ordpeer != peer;peer, ok = g.peers.PickPeer(key) {
 		
 			value, err = g.getFromPeer(ctx, peer, key)
 			if err == nil {
 				g.Stats.PeerLoads.Add(1)
 				return value, nil
 			}
+            
+            ordpeer = peer;
 			g.Stats.PeerErrors.Add(1)
-        
         }
         
         
