@@ -470,11 +470,14 @@ type AtomicInt int64
 
 // Add atomically adds n to i.
 func (i *AtomicInt) Add(n int64) {
+    *((*int64)(i)) += n
+    return
 	atomic.AddInt64((*int64)(i), n)
 }
 
 // Get atomically gets the value of i.
 func (i *AtomicInt) Get() int64 {
+    return *((*int64)(i))
 	return atomic.LoadInt64((*int64)(i))
 }
 
